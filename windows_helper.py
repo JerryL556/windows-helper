@@ -12,27 +12,13 @@ from PIL import Image, ImageDraw
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
-WM_HOTKEY = 0x0312
 WM_SYSCOMMAND = 0x0112
-MOD_ALT = 0x0001
+VK_H = 0x48
 VK_P = 0x50
 SW_RESTORE = 9
 HWND_BROADCAST = 0xFFFF
 SC_MONITORPOWER = 0xF170
 MUTEX_NAME = "WindowsHelperSingleInstance"
-
-
-class MSG(ctypes.Structure):
-    _fields_ = [
-        ("hwnd", ctypes.c_void_p),
-        ("message", ctypes.c_uint),
-        ("wParam", ctypes.c_size_t),
-        ("lParam", ctypes.c_ssize_t),
-        ("time", ctypes.c_uint),
-        ("pt_x", ctypes.c_long),
-        ("pt_y", ctypes.c_long),
-        ("lPrivate", ctypes.c_uint),
-    ]
 
 
 def create_single_instance_mutex():
@@ -49,15 +35,15 @@ class WindowsHelperApp:
         self.root.minsize(420, 390)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
 
-        self.hotkey_registered = False
+        self.hotkey_pressed = False
         self.visible = True
-        self.status_var = tk.StringVar(value="Visible. Use Alt+P or the tray icon.")
+        self.status_var = tk.StringVar(value="Visible. Use H+P or the tray icon.")
         self.tray_icon = None
         self.settings_window = None
 
         self._build_ui()
         self._setup_tray_icon()
-        self._register_hotkey()
+        self._start_hotkey_monitor()
 
     def _build_ui(self):
         self.root.configure(bg="#f4f6f8")
@@ -77,7 +63,7 @@ class WindowsHelperApp:
 
         subtitle = tk.Label(
             frame,
-            text="Starts visible. Press Alt+P from anywhere, or use the tray icon, to show or hide it.",
+            text="Starts visible. Press H+P from anywhere, or use the tray icon, to show or hide it.",
             font=("Segoe UI", 10),
             bg="#f4f6f8",
             fg="#4d5a69",
@@ -278,23 +264,19 @@ class WindowsHelperApp:
     def _tray_exit_app(self, icon=None, item=None):
         self.root.after(0, self.exit_app)
 
-    def _register_hotkey(self):
-        if not user32.RegisterHotKey(None, 1, MOD_ALT, VK_P):
-            raise RuntimeError("Could not register Alt+P. Another app may already be using it.")
+    def _start_hotkey_monitor(self):
+        self.root.after(50, self._poll_hotkey_state)
 
-        self.hotkey_registered = True
-        self.root.after(50, self._poll_hotkey_messages)
+    def _poll_hotkey_state(self):
+        h_pressed = bool(user32.GetAsyncKeyState(VK_H) & 0x8000)
+        p_pressed = bool(user32.GetAsyncKeyState(VK_P) & 0x8000)
+        combo_pressed = h_pressed and p_pressed
 
-    def _poll_hotkey_messages(self):
-        msg = MSG()
-        PM_REMOVE = 0x0001
-        while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
-            if msg.message == WM_HOTKEY:
-                self.toggle_window()
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageW(ctypes.byref(msg))
-        if self.hotkey_registered:
-            self.root.after(50, self._poll_hotkey_messages)
+        if combo_pressed and not self.hotkey_pressed:
+            self.toggle_window()
+
+        self.hotkey_pressed = combo_pressed
+        self.root.after(50, self._poll_hotkey_state)
 
     def toggle_window(self):
         if self.visible:
@@ -311,17 +293,14 @@ class WindowsHelperApp:
         user32.ShowWindow(self.root.winfo_id(), SW_RESTORE)
         user32.SetForegroundWindow(self.root.winfo_id())
         self.visible = True
-        self.status_var.set("Visible. Press Alt+P or use the tray icon.")
+        self.status_var.set("Visible. Press H+P or use the tray icon.")
 
     def hide_window(self):
         self.root.withdraw()
         self.visible = False
-        self.status_var.set("Hidden to tray. Press Alt+P or tray Show.")
+        self.status_var.set("Hidden to tray. Press H+P or tray Show.")
 
     def exit_app(self):
-        if self.hotkey_registered:
-            user32.UnregisterHotKey(None, 1)
-            self.hotkey_registered = False
         if self.tray_icon is not None:
             self.tray_icon.stop()
         self.root.destroy()
