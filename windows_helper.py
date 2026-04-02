@@ -13,7 +13,7 @@ user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
 WM_SYSCOMMAND = 0x0112
-VK_H = 0x48
+VK_MENU = 0x12
 VK_P = 0x50
 SW_RESTORE = 9
 HWND_BROADCAST = 0xFFFF
@@ -22,6 +22,7 @@ MUTEX_NAME = "WindowsHelperSingleInstance"
 
 
 def create_single_instance_mutex():
+    # Use a named mutex so launching the packaged app twice shows one shared instance.
     mutex = kernel32.CreateMutexW(None, True, MUTEX_NAME)
     already_running = kernel32.GetLastError() == 183
     return mutex, already_running
@@ -37,7 +38,7 @@ class WindowsHelperApp:
 
         self.hotkey_pressed = False
         self.visible = True
-        self.status_var = tk.StringVar(value="Visible. Use H+P or the tray icon.")
+        self.status_var = tk.StringVar(value="Visible. Use Alt+P or the tray icon.")
         self.tray_icon = None
         self.settings_window = None
 
@@ -63,7 +64,7 @@ class WindowsHelperApp:
 
         subtitle = tk.Label(
             frame,
-            text="Starts visible. Press H+P from anywhere, or use the tray icon, to show or hide it.",
+            text="Starts visible. Press Alt+P from anywhere, or use the tray icon, to show or hide it.",
             font=("Segoe UI", 10),
             bg="#f4f6f8",
             fg="#4d5a69",
@@ -160,7 +161,7 @@ class WindowsHelperApp:
             return
 
         if command == "downloads":
-            downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
+            downloads_path = r"E:\下载"
             subprocess.Popen(["explorer.exe", downloads_path])
             return
 
@@ -247,6 +248,7 @@ class WindowsHelperApp:
         return image
 
     def _setup_tray_icon(self):
+        # Run the tray icon on its own thread so Tk's mainloop stays responsive.
         menu = pystray.Menu(
             pystray.MenuItem("Show", self._tray_show_window, default=True),
             pystray.MenuItem("Hide", self._tray_hide_window),
@@ -265,12 +267,13 @@ class WindowsHelperApp:
         self.root.after(0, self.exit_app)
 
     def _start_hotkey_monitor(self):
+        # Polling avoids extra global hook dependencies for this lightweight helper.
         self.root.after(50, self._poll_hotkey_state)
 
     def _poll_hotkey_state(self):
-        h_pressed = bool(user32.GetAsyncKeyState(VK_H) & 0x8000)
+        alt_pressed = bool(user32.GetAsyncKeyState(VK_MENU) & 0x8000)
         p_pressed = bool(user32.GetAsyncKeyState(VK_P) & 0x8000)
-        combo_pressed = h_pressed and p_pressed
+        combo_pressed = alt_pressed and p_pressed
 
         if combo_pressed and not self.hotkey_pressed:
             self.toggle_window()
@@ -288,17 +291,18 @@ class WindowsHelperApp:
         self.root.deiconify()
         self.root.state("normal")
         self.root.lift()
+        # Briefly force topmost so the restored window reliably comes to the front.
         self.root.attributes("-topmost", True)
         self.root.after(200, lambda: self.root.attributes("-topmost", False))
         user32.ShowWindow(self.root.winfo_id(), SW_RESTORE)
         user32.SetForegroundWindow(self.root.winfo_id())
         self.visible = True
-        self.status_var.set("Visible. Press H+P or use the tray icon.")
+        self.status_var.set("Visible. Press Alt+P or use the tray icon.")
 
     def hide_window(self):
         self.root.withdraw()
         self.visible = False
-        self.status_var.set("Hidden to tray. Press H+P or tray Show.")
+        self.status_var.set("Hidden to tray. Press Alt+P or tray Show.")
 
     def exit_app(self):
         if self.tray_icon is not None:
