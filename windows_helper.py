@@ -1,5 +1,4 @@
 import ctypes
-import os
 import subprocess
 import sys
 import tkinter as tk
@@ -19,6 +18,7 @@ SW_RESTORE = 9
 HWND_BROADCAST = 0xFFFF
 SC_MONITORPOWER = 0xF170
 MUTEX_NAME = "WindowsHelperSingleInstance"
+DOWNLOADS_PATH = r"E:\下载"
 
 
 def create_single_instance_mutex():
@@ -32,13 +32,14 @@ class WindowsHelperApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Windows Helper")
-        self.root.geometry("420x390")
-        self.root.minsize(420, 390)
+        self.root.geometry("760x560")
+        self.root.minsize(700, 520)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
 
         self.hotkey_pressed = False
         self.visible = True
         self.status_var = tk.StringVar(value="Visible. Use Alt+P or the tray icon.")
+        self.last_action_var = tk.StringVar(value="Ready")
         self.tray_icon = None
         self.settings_window = None
 
@@ -47,84 +48,228 @@ class WindowsHelperApp:
         self._start_hotkey_monitor()
 
     def _build_ui(self):
-        self.root.configure(bg="#f4f6f8")
+        self.root.configure(bg="#eef3f8")
         self._build_menu()
 
-        frame = tk.Frame(self.root, bg="#f4f6f8", padx=18, pady=18)
+        frame = tk.Frame(self.root, bg="#eef3f8", padx=22, pady=20)
         frame.pack(fill="both", expand=True)
 
-        title = tk.Label(
-            frame,
+        header = tk.Frame(frame, bg="#1f3b5b", padx=20, pady=18)
+        header.pack(fill="x")
+
+        tk.Label(
+            header,
             text="Windows Helper",
-            font=("Segoe UI Semibold", 20),
-            bg="#f4f6f8",
-            fg="#1d2733",
-        )
-        title.pack(anchor="w")
+            font=("Segoe UI Semibold", 22),
+            bg="#1f3b5b",
+            fg="#ffffff",
+        ).pack(anchor="w")
 
-        subtitle = tk.Label(
-            frame,
-            text="Starts visible. Press Alt+P from anywhere, or use the tray icon, to show or hide it.",
+        tk.Label(
+            header,
+            text="Fast access to common Windows tools, folders, and system controls.",
             font=("Segoe UI", 10),
-            bg="#f4f6f8",
-            fg="#4d5a69",
-            wraplength=370,
+            bg="#1f3b5b",
+            fg="#d8e4f0",
+            wraplength=620,
             justify="left",
+        ).pack(anchor="w", pady=(6, 12))
+
+        meta = tk.Frame(header, bg="#1f3b5b")
+        meta.pack(fill="x")
+
+        tk.Label(
+            meta,
+            text="Hotkey: Alt+P",
+            font=("Segoe UI Semibold", 10),
+            bg="#dbe8f5",
+            fg="#18314c",
+            padx=10,
+            pady=4,
+        ).pack(side="left")
+
+        tk.Label(
+            meta,
+            textvariable=self.last_action_var,
+            font=("Segoe UI", 10),
+            bg="#1f3b5b",
+            fg="#ffffff",
+        ).pack(side="right")
+
+        content = tk.Frame(frame, bg="#eef3f8")
+        content.pack(fill="both", expand=True, pady=(18, 14))
+        content.grid_columnconfigure(0, weight=1, uniform="main")
+        content.grid_columnconfigure(1, weight=1, uniform="main")
+        content.grid_rowconfigure(0, weight=1)
+        content.grid_rowconfigure(1, weight=1)
+
+        self._build_section(
+            content,
+            0,
+            0,
+            "System",
+            "Everyday Windows tools and controls.",
+            [
+                ("Open Windows Settings", "start ms-settings:", False),
+                ("Open Task Manager", "taskmgr", False),
+                ("Open Calculator", "calculator", True),
+                ("Open Command Prompt", "start cmd", False),
+            ],
         )
-        subtitle.pack(anchor="w", pady=(6, 18))
 
-        buttons = [
-            ("Open Windows Settings", "start ms-settings:"),
-            ("Open Task Manager", "taskmgr"),
-            ("Open Calculator", "calculator"),
-            ("Open Downloads Folder", "downloads"),
-            ("Open Startup Folder", 'explorer.exe shell:startup'),
-            ("Open Command Prompt", "start cmd"),
-            ("Show IP Config", "ipconfig"),
-            ("Lock And Turn Off Screen", "lock_and_screen_off"),
-            ("Lock PC", "rundll32.exe user32.dll,LockWorkStation"),
-        ]
+        self._build_section(
+            content,
+            0,
+            1,
+            "Folders And Info",
+            "Jump to frequent locations or inspect network details.",
+            [
+                ("Open Downloads Folder", "downloads", True),
+                ("Open Startup Folder", 'explorer.exe shell:startup', False),
+                ("Show IP Config", "ipconfig", False),
+            ],
+        )
 
-        for text, command in buttons:
-            tk.Button(
-                frame,
-                text=text,
-                font=("Segoe UI", 10),
-                bg="#ffffff",
-                fg="#17202a",
-                relief="solid",
-                bd=1,
-                anchor="w",
-                padx=12,
-                command=lambda cmd=command: self.run_command(cmd),
-            ).pack(fill="x", pady=4)
+        self._build_section(
+            content,
+            1,
+            0,
+            "Power And Security",
+            "Quick lock actions, separated from the rest of the shortcuts.",
+            [
+                ("Lock PC", "rundll32.exe user32.dll,LockWorkStation", False),
+                ("Lock And Turn Off Screen", "lock_and_screen_off", False),
+            ],
+        )
 
-        footer = tk.Frame(frame, bg="#f4f6f8")
-        footer.pack(fill="x", pady=(18, 0))
+        quick_panel = tk.Frame(content, bg="#ffffff", bd=1, relief="solid", padx=18, pady=18)
+        quick_panel.grid(row=1, column=1, sticky="nsew", padx=(10, 0), pady=(10, 0))
+
+        tk.Label(
+            quick_panel,
+            text="Helper Controls",
+            font=("Segoe UI Semibold", 14),
+            bg="#ffffff",
+            fg="#1d2733",
+        ).pack(anchor="w")
+
+        tk.Label(
+            quick_panel,
+            text="Manage the app window and open the preferences panel.",
+            font=("Segoe UI", 10),
+            bg="#ffffff",
+            fg="#5b6978",
+            wraplength=280,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 14))
+
+        tk.Button(
+            quick_panel,
+            text="Open Helper Settings",
+            font=("Segoe UI Semibold", 10),
+            bg="#245f94",
+            fg="#ffffff",
+            activebackground="#1f527f",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=10,
+            command=self.open_settings_window,
+        ).pack(fill="x", pady=(0, 8))
+
+        tk.Button(
+            quick_panel,
+            text="Hide To Tray",
+            font=("Segoe UI", 10),
+            bg="#edf3f9",
+            fg="#18314c",
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=10,
+            command=self.hide_window,
+        ).pack(fill="x", pady=(0, 8))
+
+        tk.Button(
+            quick_panel,
+            text="Exit Helper",
+            font=("Segoe UI", 10),
+            bg="#f7eaea",
+            fg="#7a2525",
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=10,
+            command=self.exit_app,
+        ).pack(fill="x")
+
+        footer = tk.Frame(frame, bg="#dfe8f1", padx=16, pady=12)
+        footer.pack(fill="x")
 
         tk.Label(
             footer,
             textvariable=self.status_var,
             font=("Segoe UI", 9),
-            bg="#f4f6f8",
-            fg="#566574",
+            bg="#dfe8f1",
+            fg="#425364",
         ).pack(side="left")
 
-        tk.Button(
+        tk.Label(
             footer,
-            text="Hide",
-            font=("Segoe UI", 10),
-            command=self.hide_window,
-            padx=12,
-        ).pack(side="right", padx=(8, 0))
-
-        tk.Button(
-            footer,
-            text="Exit",
-            font=("Segoe UI", 10),
-            command=self.exit_app,
-            padx=12,
+            text="Tray ready",
+            font=("Segoe UI Semibold", 9),
+            bg="#dfe8f1",
+            fg="#1f3b5b",
         ).pack(side="right")
+
+    def _build_section(self, parent, row, column, title, description, actions):
+        section = tk.Frame(parent, bg="#ffffff", bd=1, relief="solid", padx=18, pady=18)
+        section.grid(
+            row=row,
+            column=column,
+            sticky="nsew",
+            padx=(0 if column == 0 else 10, 0),
+            pady=(0 if row == 0 else 10, 0),
+        )
+
+        tk.Label(
+            section,
+            text=title,
+            font=("Segoe UI Semibold", 14),
+            bg="#ffffff",
+            fg="#1d2733",
+        ).pack(anchor="w")
+
+        tk.Label(
+            section,
+            text=description,
+            font=("Segoe UI", 10),
+            bg="#ffffff",
+            fg="#5b6978",
+            wraplength=280,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 14))
+
+        for label, command, primary in actions:
+            button_bg = "#245f94" if primary else "#edf3f9"
+            button_fg = "#ffffff" if primary else "#18314c"
+            active_bg = "#1f527f" if primary else "#dce8f4"
+            tk.Button(
+                section,
+                text=label,
+                font=("Segoe UI Semibold" if primary else "Segoe UI", 10),
+                bg=button_bg,
+                fg=button_fg,
+                activebackground=active_bg,
+                activeforeground=button_fg,
+                relief="flat",
+                bd=0,
+                anchor="w",
+                padx=12,
+                pady=10,
+                command=lambda cmd=command: self.run_command(cmd),
+            ).pack(fill="x", pady=4)
 
     def _build_menu(self):
         menu_bar = tk.Menu(self.root)
@@ -153,6 +298,7 @@ class WindowsHelperApp:
     def run_command(self, command):
         if command == "calculator":
             subprocess.Popen(["calc.exe"])
+            self._set_action_status("Opened Calculator")
             return
 
         if command == "ipconfig":
@@ -164,19 +310,33 @@ class WindowsHelperApp:
                 check=False,
             ).stdout.strip()
             messagebox.showinfo("IP Configuration", output or "No output returned.")
+            self._set_action_status("Displayed IP configuration")
             return
 
         if command == "downloads":
-            downloads_path = r"E:\下载"
-            subprocess.Popen(["explorer.exe", downloads_path])
+            subprocess.Popen(["explorer.exe", DOWNLOADS_PATH])
+            self._set_action_status("Opened Downloads folder")
             return
 
         if command == "lock_and_screen_off":
             user32.LockWorkStation()
             self.root.after(500, lambda: user32.SendMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2))
+            self._set_action_status("Locked PC and turned off the screen")
             return
 
         subprocess.Popen(command, shell=True)
+        if command == "start ms-settings:":
+            self._set_action_status("Opened Windows Settings")
+        elif command == "taskmgr":
+            self._set_action_status("Opened Task Manager")
+        elif command == 'explorer.exe shell:startup':
+            self._set_action_status("Opened Startup folder")
+        elif command == "start cmd":
+            self._set_action_status("Opened Command Prompt")
+        elif command == "rundll32.exe user32.dll,LockWorkStation":
+            self._set_action_status("Locked PC")
+        else:
+            self._set_action_status("Ran command")
 
     def open_settings_window(self):
         if self.settings_window is not None and self.settings_window.winfo_exists():
@@ -186,57 +346,117 @@ class WindowsHelperApp:
 
         window = tk.Toplevel(self.root)
         window.title("Helper Settings")
-        window.geometry("360x220")
-        window.minsize(360, 220)
-        window.configure(bg="#f4f6f8")
+        window.geometry("440x340")
+        window.minsize(420, 320)
+        window.configure(bg="#eef3f8")
         window.transient(self.root)
         self.settings_window = window
         window.bind("<Destroy>", self._on_settings_window_destroy, add="+")
 
-        frame = tk.Frame(window, bg="#f4f6f8", padx=18, pady=18)
+        frame = tk.Frame(window, bg="#eef3f8", padx=18, pady=18)
         frame.pack(fill="both", expand=True)
 
+        hero = tk.Frame(frame, bg="#1f3b5b", padx=18, pady=16)
+        hero.pack(fill="x")
+
         tk.Label(
-            frame,
+            hero,
             text="Helper Settings",
             font=("Segoe UI Semibold", 16),
-            bg="#f4f6f8",
-            fg="#1d2733",
+            bg="#1f3b5b",
+            fg="#ffffff",
         ).pack(anchor="w")
 
         tk.Label(
-            frame,
-            text="This panel gives you quick access to helper behavior and Windows settings.",
+            hero,
+            text="Quick controls for startup behavior, tray usage, and common helper actions.",
             font=("Segoe UI", 10),
-            bg="#f4f6f8",
-            fg="#4d5a69",
-            wraplength=300,
+            bg="#1f3b5b",
+            fg="#d8e4f0",
+            wraplength=360,
             justify="left",
         ).pack(anchor="w", pady=(6, 16))
 
-        tk.Button(
-            frame,
-            text="Open Windows Settings",
-            font=("Segoe UI", 10),
-            command=lambda: self.run_command("start ms-settings:"),
-            padx=12,
-        ).pack(fill="x", pady=4)
+        body = tk.Frame(frame, bg="#ffffff", bd=1, relief="solid", padx=18, pady=18)
+        body.pack(fill="both", expand=True, pady=(14, 0))
 
         tk.Button(
-            frame,
+            body,
+            text="Open Windows Settings",
+            font=("Segoe UI Semibold", 10),
+            bg="#245f94",
+            fg="#ffffff",
+            activebackground="#1f527f",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=10,
+            command=lambda: self.run_command("start ms-settings:"),
+        ).pack(fill="x", pady=4)
+
+        info_row = tk.Frame(body, bg="#ffffff")
+        info_row.pack(fill="x", pady=(12, 10))
+
+        tk.Label(
+            info_row,
+            text="Hotkey",
+            font=("Segoe UI Semibold", 10),
+            bg="#ffffff",
+            fg="#1d2733",
+        ).grid(row=0, column=0, sticky="w")
+
+        tk.Label(
+            info_row,
+            text="Alt+P toggles the main window from anywhere.",
+            font=("Segoe UI", 10),
+            bg="#ffffff",
+            fg="#5b6978",
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+
+        tk.Label(
+            info_row,
+            text="Window State",
+            font=("Segoe UI Semibold", 10),
+            bg="#ffffff",
+            fg="#1d2733",
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+
+        tk.Label(
+            info_row,
+            textvariable=self.status_var,
+            font=("Segoe UI", 10),
+            bg="#ffffff",
+            fg="#5b6978",
+            wraplength=240,
+            justify="left",
+        ).grid(row=1, column=1, sticky="w", padx=(12, 0), pady=(8, 0))
+
+        tk.Button(
+            body,
             text="Hide To Tray",
             font=("Segoe UI", 10),
-            command=self.hide_window,
+            bg="#edf3f9",
+            fg="#18314c",
+            relief="flat",
+            bd=0,
             padx=12,
+            pady=10,
+            command=self.hide_window,
         ).pack(fill="x", pady=4)
 
         tk.Button(
-            frame,
+            body,
             text="Close Settings",
             font=("Segoe UI", 10),
-            command=window.destroy,
+            bg="#edf0f5",
+            fg="#18314c",
+            relief="flat",
+            bd=0,
             padx=12,
-        ).pack(fill="x", pady=4)
+            pady=10,
+            command=window.destroy,
+        ).pack(fill="x", pady=(10, 0))
 
         window.protocol("WM_DELETE_WINDOW", window.destroy)
 
@@ -304,16 +524,22 @@ class WindowsHelperApp:
         user32.SetForegroundWindow(self.root.winfo_id())
         self.visible = True
         self.status_var.set("Visible. Press Alt+P or use the tray icon.")
+        self.last_action_var.set("Window restored")
 
     def hide_window(self):
         self.root.withdraw()
         self.visible = False
         self.status_var.set("Hidden to tray. Press Alt+P or tray Show.")
+        self.last_action_var.set("Hidden to tray")
 
     def exit_app(self):
         if self.tray_icon is not None:
             self.tray_icon.stop()
         self.root.destroy()
+
+    def _set_action_status(self, message):
+        self.last_action_var.set(message)
+        self.status_var.set(f"{message}. Press Alt+P or use the tray icon.")
 
     def run(self):
         self.root.mainloop()
