@@ -76,6 +76,7 @@ class WindowsHelperApp:
         buttons = [
             ("Open Windows Settings", "start ms-settings:"),
             ("Open Task Manager", "taskmgr"),
+            ("Open Calculator", "calculator"),
             ("Open Downloads Folder", "downloads"),
             ("Open Startup Folder", 'explorer.exe shell:startup'),
             ("Open Command Prompt", "start cmd"),
@@ -137,6 +138,7 @@ class WindowsHelperApp:
 
         tools_menu = tk.Menu(menu_bar, tearoff=0)
         tools_menu.add_command(label="Open Windows Settings", command=lambda: self.run_command("start ms-settings:"))
+        tools_menu.add_command(label="Open Calculator", command=lambda: self.run_command("calculator"))
         tools_menu.add_command(label="Open Downloads Folder", command=lambda: self.run_command("downloads"))
         tools_menu.add_command(label="Show IP Config", command=lambda: self.run_command("ipconfig"))
         tools_menu.add_command(label="Lock And Turn Off Screen", command=lambda: self.run_command("lock_and_screen_off"))
@@ -149,6 +151,10 @@ class WindowsHelperApp:
         self.root.config(menu=menu_bar)
 
     def run_command(self, command):
+        if command == "calculator":
+            subprocess.Popen(["calc.exe"])
+            return
+
         if command == "ipconfig":
             output = subprocess.run(
                 ["ipconfig"],
