@@ -11,12 +11,9 @@ from PIL import Image, ImageDraw
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
-WM_SYSCOMMAND = 0x0112
 VK_MENU = 0x12
 VK_P = 0x50
 SW_RESTORE = 9
-HWND_BROADCAST = 0xFFFF
-SC_MONITORPOWER = 0xF170
 MUTEX_NAME = "WindowsHelperSingleInstance"
 DOWNLOADS_PATH = r"E:\下载"
 
@@ -33,7 +30,7 @@ class WindowsHelperApp:
         self.root = tk.Tk()
         self.root.title("Windows Helper")
         self.root.geometry("760x560")
-        self.root.minsize(700, 520)
+        self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
 
         self.hotkey_pressed = False
@@ -138,7 +135,6 @@ class WindowsHelperApp:
             "Quick lock actions, separated from the rest of the shortcuts.",
             [
                 ("Lock PC", "rundll32.exe user32.dll,LockWorkStation", False),
-                ("Lock And Turn Off Screen", "lock_and_screen_off", False),
             ],
         )
 
@@ -286,7 +282,6 @@ class WindowsHelperApp:
         tools_menu.add_command(label="Open Calculator", command=lambda: self.run_command("calculator"))
         tools_menu.add_command(label="Open Downloads Folder", command=lambda: self.run_command("downloads"))
         tools_menu.add_command(label="Show IP Config", command=lambda: self.run_command("ipconfig"))
-        tools_menu.add_command(label="Lock And Turn Off Screen", command=lambda: self.run_command("lock_and_screen_off"))
         menu_bar.add_cascade(label="Tools", menu=tools_menu)
 
         settings_menu = tk.Menu(menu_bar, tearoff=0)
@@ -316,12 +311,6 @@ class WindowsHelperApp:
         if command == "downloads":
             subprocess.Popen(["explorer.exe", DOWNLOADS_PATH])
             self._set_action_status("Opened Downloads folder")
-            return
-
-        if command == "lock_and_screen_off":
-            user32.LockWorkStation()
-            self.root.after(500, lambda: user32.SendMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2))
-            self._set_action_status("Locked PC and turned off the screen")
             return
 
         subprocess.Popen(command, shell=True)
