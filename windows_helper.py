@@ -1,4 +1,5 @@
 import ctypes
+import ctypes.wintypes
 import subprocess
 import sys
 import tkinter as tk
@@ -10,10 +11,17 @@ from PIL import Image, ImageDraw
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
+EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
 VK_MENU = 0x12
 VK_P = 0x50
 SW_RESTORE = 9
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+SM_XVIRTUALSCREEN = 76
+SM_YVIRTUALSCREEN = 77
+SM_CXVIRTUALSCREEN = 78
+SM_CYVIRTUALSCREEN = 79
 MUTEX_NAME = "WindowsHelperSingleInstance"
 DOWNLOADS_PATH = r"E:\下载"
 
@@ -29,8 +37,9 @@ class WindowsHelperApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Windows Helper")
-        self.root.geometry("760x560")
-        self.root.resizable(False, False)
+        self.root.geometry("980x720")
+        self.root.minsize(760, 620)
+        self.root.resizable(True, True)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
 
         self.hotkey_pressed = False
@@ -39,6 +48,16 @@ class WindowsHelperApp:
         self.last_action_var = tk.StringVar(value="Ready")
         self.tray_icon = None
         self.settings_window = None
+        self.content_canvas = None
+        self.content_frame = None
+        self.content_window = None
+        self.window_listbox = None
+        self.window_targets = []
+        self.blackout_window = None
+        self.blackout_canvas = None
+        self.blackout_text_id = None
+        self.blackout_animation_job = None
+        self.blackout_velocity = (6, 5)
 
         self._build_ui()
         self._setup_tray_icon()
@@ -48,11 +67,13 @@ class WindowsHelperApp:
         self.root.configure(bg="#eef3f8")
         self._build_menu()
 
-        frame = tk.Frame(self.root, bg="#eef3f8", padx=22, pady=20)
+        frame = tk.Frame(self.root, bg="#eef3f8", padx=18, pady=18)
         frame.pack(fill="both", expand=True)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(1, weight=1)
 
         header = tk.Frame(frame, bg="#1f3b5b", padx=20, pady=18)
-        header.pack(fill="x")
+        header.grid(row=0, column=0, sticky="ew")
 
         tk.Label(
             header,
@@ -93,12 +114,31 @@ class WindowsHelperApp:
             fg="#ffffff",
         ).pack(side="right")
 
-        content = tk.Frame(frame, bg="#eef3f8")
-        content.pack(fill="both", expand=True, pady=(18, 14))
+        content_shell = tk.Frame(frame, bg="#eef3f8")
+        content_shell.grid(row=1, column=0, sticky="nsew", pady=(14, 12))
+        content_shell.grid_columnconfigure(0, weight=1)
+        content_shell.grid_rowconfigure(0, weight=1)
+
+        self.content_canvas = tk.Canvas(
+            content_shell,
+            bg="#eef3f8",
+            highlightthickness=0,
+            bd=0,
+        )
+        scrollbar = tk.Scrollbar(content_shell, orient="vertical", command=self.content_canvas.yview)
+        self.content_canvas.configure(yscrollcommand=scrollbar.set)
+        self.content_canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        self.content_frame = tk.Frame(self.content_canvas, bg="#eef3f8")
+        self.content_window = self.content_canvas.create_window((0, 0), window=self.content_frame, anchor="nw")
+        self.content_frame.bind("<Configure>", self._on_content_configure)
+        self.content_canvas.bind("<Configure>", self._on_canvas_configure)
+        self.content_canvas.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
+
+        content = self.content_frame
         content.grid_columnconfigure(0, weight=1, uniform="main")
         content.grid_columnconfigure(1, weight=1, uniform="main")
-        content.grid_rowconfigure(0, weight=1)
-        content.grid_rowconfigure(1, weight=1)
 
         self._build_section(
             content,
@@ -189,6 +229,21 @@ class WindowsHelperApp:
 
         tk.Button(
             quick_panel,
+            text="Black Out Screen",
+            font=("Segoe UI Semibold", 10),
+            bg="#111111",
+            fg="#ffffff",
+            activebackground="#000000",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=10,
+            command=self.open_blackout_screen,
+        ).pack(fill="x", pady=(0, 8))
+
+        tk.Button(
+            quick_panel,
             text="Exit Helper",
             font=("Segoe UI", 10),
             bg="#f7eaea",
@@ -200,8 +255,11 @@ class WindowsHelperApp:
             command=self.exit_app,
         ).pack(fill="x")
 
+        self._build_window_resize_panel(content, 2, 0, 2)
+        self.refresh_window_list()
+
         footer = tk.Frame(frame, bg="#dfe8f1", padx=16, pady=12)
-        footer.pack(fill="x")
+        footer.grid(row=2, column=0, sticky="ew")
 
         tk.Label(
             footer,
@@ -267,6 +325,109 @@ class WindowsHelperApp:
                 command=lambda cmd=command: self.run_command(cmd),
             ).pack(fill="x", pady=4)
 
+    def _build_window_resize_panel(self, parent, row, column, columnspan):
+        panel = tk.Frame(parent, bg="#ffffff", bd=1, relief="solid", padx=18, pady=18)
+        panel.grid(
+            row=row,
+            column=column,
+            columnspan=columnspan,
+            sticky="nsew",
+            pady=(10, 0),
+        )
+
+        header = tk.Frame(panel, bg="#ffffff")
+        header.pack(fill="x")
+
+        tk.Label(
+            header,
+            text="Window Resize",
+            font=("Segoe UI Semibold", 14),
+            bg="#ffffff",
+            fg="#1d2733",
+        ).pack(side="left")
+
+        tk.Button(
+            header,
+            text="Refresh Windows",
+            font=("Segoe UI", 10),
+            bg="#edf3f9",
+            fg="#18314c",
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=8,
+            command=self.refresh_window_list,
+        ).pack(side="right")
+
+        tk.Label(
+            panel,
+            text="Select an open app window and force it to half the screen width and height, which is one quarter of the display area.",
+            font=("Segoe UI", 10),
+            bg="#ffffff",
+            fg="#5b6978",
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 14))
+
+        list_frame = tk.Frame(panel, bg="#ffffff")
+        list_frame.pack(fill="both", expand=True)
+        list_frame.grid_columnconfigure(0, weight=1)
+        list_frame.grid_rowconfigure(0, weight=1)
+
+        self.window_listbox = tk.Listbox(
+            list_frame,
+            font=("Segoe UI", 10),
+            activestyle="none",
+            exportselection=False,
+            height=8,
+        )
+        list_scrollbar = tk.Scrollbar(list_frame, orient="vertical", command=self.window_listbox.yview)
+        self.window_listbox.configure(yscrollcommand=list_scrollbar.set)
+        self.window_listbox.grid(row=0, column=0, sticky="nsew")
+        list_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        actions = tk.Frame(panel, bg="#ffffff")
+        actions.pack(fill="x", pady=(14, 0))
+
+        tk.Button(
+            actions,
+            text="Resize Selected Window To Quarter Screen",
+            font=("Segoe UI Semibold", 10),
+            bg="#245f94",
+            fg="#ffffff",
+            activebackground="#1f527f",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=10,
+            command=self.resize_selected_window,
+        ).pack(side="left")
+
+        tk.Label(
+            actions,
+            text="The helper restores the target first, then resizes it.",
+            font=("Segoe UI", 9),
+            bg="#ffffff",
+            fg="#5b6978",
+        ).pack(side="right")
+
+    def _on_content_configure(self, event):
+        self.content_canvas.configure(scrollregion=self.content_canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event):
+        self.content_canvas.itemconfigure(self.content_window, width=event.width)
+
+    def _on_mousewheel(self, event):
+        if not self.root.winfo_exists() or self.content_canvas is None:
+            return
+        widget = event.widget
+        while widget is not None:
+            if widget is self.content_canvas:
+                self.content_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                return
+            widget = getattr(widget, "master", None)
+
     def _build_menu(self):
         menu_bar = tk.Menu(self.root)
 
@@ -289,6 +450,231 @@ class WindowsHelperApp:
         menu_bar.add_cascade(label="Settings", menu=settings_menu)
 
         self.root.config(menu=menu_bar)
+
+    def refresh_window_list(self):
+        windows = self._enumerate_resizeable_windows()
+        self.window_targets = windows
+        if self.window_listbox is None:
+            return
+
+        self.window_listbox.delete(0, tk.END)
+        for item in windows:
+            self.window_listbox.insert(tk.END, item["label"])
+
+        if windows:
+            self.window_listbox.selection_set(0)
+            self.last_action_var.set(f"Found {len(windows)} open windows")
+        else:
+            self.last_action_var.set("No open windows available")
+
+    def _enumerate_resizeable_windows(self):
+        windows = []
+        helper_hwnd = self.root.winfo_id()
+
+        def callback(hwnd, lparam):
+            if hwnd == helper_hwnd or not user32.IsWindowVisible(hwnd):
+                return True
+
+            title_length = user32.GetWindowTextLengthW(hwnd)
+            if title_length <= 0:
+                return True
+
+            title_buffer = ctypes.create_unicode_buffer(title_length + 1)
+            user32.GetWindowTextW(hwnd, title_buffer, title_length + 1)
+            title = title_buffer.value.strip()
+            if not title:
+                return True
+
+            rect = ctypes.wintypes.RECT()
+            if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return True
+
+            width = rect.right - rect.left
+            height = rect.bottom - rect.top
+            if width <= 0 or height <= 0:
+                return True
+
+            windows.append(
+                {
+                    "hwnd": hwnd,
+                    "title": title,
+                    "label": f"{title} ({width}x{height})",
+                }
+            )
+            return True
+
+        user32.EnumWindows(EnumWindowsProc(callback), 0)
+        windows.sort(key=lambda item: item["title"].lower())
+        return windows
+
+    def resize_selected_window(self):
+        if self.window_listbox is None:
+            return
+
+        selection = self.window_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Window Resize", "Select a window first.")
+            return
+
+        target = self.window_targets[selection[0]]
+        hwnd = target["hwnd"]
+
+        if not user32.IsWindow(hwnd):
+            messagebox.showwarning(
+                "Window Resize",
+                "That window is no longer available. Refresh the list and try again.",
+            )
+            self.refresh_window_list()
+            return
+
+        screen_width = user32.GetSystemMetrics(0)
+        screen_height = user32.GetSystemMetrics(1)
+        target_width = max(320, screen_width // 2)
+        target_height = max(240, screen_height // 2)
+
+        rect = ctypes.wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            messagebox.showerror("Window Resize", "Unable to read the selected window position.")
+            return
+
+        x = min(max(rect.left, 0), max(screen_width - target_width, 0))
+        y = min(max(rect.top, 0), max(screen_height - target_height, 0))
+
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        resized = user32.SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            target_width,
+            target_height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+
+        if not resized:
+            messagebox.showerror("Window Resize", "Windows rejected the resize request for that app.")
+            self._set_action_status("Quarter-screen resize failed")
+            return
+
+        self._set_action_status(f"Resized {target['title']} to quarter screen")
+        self.refresh_window_list()
+
+    def open_blackout_screen(self):
+        if self.blackout_window is not None and self.blackout_window.winfo_exists():
+            self._focus_blackout_screen()
+            return
+
+        overlay = tk.Toplevel(self.root, bg="#000000")
+        overlay.overrideredirect(True)
+        overlay.attributes("-topmost", True)
+        overlay.configure(cursor="none")
+
+        x = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+        y = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        width = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+        height = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+        overlay.geometry(f"{width}x{height}{x:+d}{y:+d}")
+
+        overlay.bind("<KeyPress>", self.close_blackout_screen)
+        overlay.bind("<Button>", lambda event: "break")
+        overlay.bind("<ButtonRelease>", lambda event: "break")
+        overlay.bind("<Motion>", lambda event: "break")
+        overlay.bind("<MouseWheel>", lambda event: "break")
+        overlay.bind("<Destroy>", self._on_blackout_destroy, add="+")
+
+        canvas = tk.Canvas(
+            overlay,
+            bg="#000000",
+            highlightthickness=0,
+            bd=0,
+        )
+        canvas.pack(fill="both", expand=True)
+        self.blackout_canvas = canvas
+        self.blackout_text_id = canvas.create_text(
+            width // 2,
+            height // 2,
+            text="Press anything to exit",
+            font=("Segoe UI Semibold", 26),
+            fill="#4e4e4e",
+            justify="center",
+        )
+
+        self.blackout_window = overlay
+        self._focus_blackout_screen()
+        self._start_blackout_animation()
+        self._set_action_status("Screen blackout active")
+
+    def _start_blackout_animation(self):
+        if self.blackout_canvas is None or self.blackout_text_id is None:
+            return
+
+        if self.blackout_animation_job is not None:
+            self.blackout_canvas.after_cancel(self.blackout_animation_job)
+            self.blackout_animation_job = None
+
+        self.blackout_velocity = (6, 5)
+        self._animate_blackout_text()
+
+    def _animate_blackout_text(self):
+        if (
+            self.blackout_window is None
+            or not self.blackout_window.winfo_exists()
+            or self.blackout_canvas is None
+            or self.blackout_text_id is None
+        ):
+            return
+
+        self.blackout_canvas.update_idletasks()
+        canvas_width = self.blackout_canvas.winfo_width()
+        canvas_height = self.blackout_canvas.winfo_height()
+        bounds = self.blackout_canvas.bbox(self.blackout_text_id)
+        if bounds is None or canvas_width <= 0 or canvas_height <= 0:
+            self.blackout_animation_job = self.blackout_canvas.after(30, self._animate_blackout_text)
+            return
+
+        left, top, right, bottom = bounds
+        dx, dy = self.blackout_velocity
+
+        if left + dx <= 0 or right + dx >= canvas_width:
+            dx *= -1
+        if top + dy <= 0 or bottom + dy >= canvas_height:
+            dy *= -1
+
+        self.blackout_velocity = (dx, dy)
+        self.blackout_canvas.move(self.blackout_text_id, dx, dy)
+        self.blackout_animation_job = self.blackout_canvas.after(30, self._animate_blackout_text)
+
+    def _focus_blackout_screen(self):
+        if self.blackout_window is None or not self.blackout_window.winfo_exists():
+            return
+
+        self.blackout_window.deiconify()
+        self.blackout_window.lift()
+        self.blackout_window.attributes("-topmost", True)
+        self.blackout_window.focus_force()
+        self.blackout_window.grab_set()
+
+    def close_blackout_screen(self, event=None):
+        if self.blackout_window is None or not self.blackout_window.winfo_exists():
+            return
+
+        if self.blackout_animation_job is not None and self.blackout_canvas is not None:
+            self.blackout_canvas.after_cancel(self.blackout_animation_job)
+            self.blackout_animation_job = None
+        try:
+            self.blackout_window.grab_release()
+        except tk.TclError:
+            pass
+        self.blackout_window.destroy()
+
+    def _on_blackout_destroy(self, event):
+        if event.widget is not self.blackout_window:
+            return
+        self.blackout_window = None
+        self.blackout_canvas = None
+        self.blackout_text_id = None
+        self.blackout_animation_job = None
+        self._set_action_status("Screen blackout cleared")
 
     def run_command(self, command):
         if command == "calculator":
