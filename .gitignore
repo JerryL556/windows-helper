@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+windows_helper_config.json
 *.spec
 build/
 build2/
