@@ -2,7 +2,11 @@ import ctypes
 import ctypes.wintypes
 import datetime
 import json
+import os
+import platform
 from pathlib import Path
+import shutil
+import socket
 import subprocess
 import sys
 import tkinter as tk
@@ -14,7 +18,23 @@ from PIL import Image, ImageDraw
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
+kernel32.GetTickCount64.restype = ctypes.c_ulonglong
 EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+
+class MemoryStatus(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", ctypes.wintypes.DWORD),
+        ("dwMemoryLoad", ctypes.wintypes.DWORD),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
+
 
 VK_MENU = 0x12
 VK_P = 0x50
@@ -65,10 +85,12 @@ class WindowsHelperApp:
         self.hotkey_label_var = tk.StringVar(value=f"Hotkey: {self._get_hotkey_label()}")
         self.status_var = tk.StringVar(value=f"Visible. Use {self._get_hotkey_label()} or the tray icon.")
         self.last_action_var = tk.StringVar(value="Ready")
+        self.system_info_var = tk.StringVar(value="Loading system info...")
         self.action_log = []
         self.tray_icon = None
         self.settings_window = None
         self.shortcut_window = None
+        self.clipboard_window = None
         self.network_window = None
         self.log_window = None
         self.log_text = None
@@ -87,6 +109,7 @@ class WindowsHelperApp:
         self._build_ui()
         self._setup_tray_icon()
         self._start_hotkey_monitor()
+        self._refresh_system_info()
 
     def _load_config(self):
         config = {
@@ -124,6 +147,59 @@ class WindowsHelperApp:
         if hotkey not in HOTKEY_OPTIONS:
             hotkey = DEFAULT_CONFIG["hotkey"]
         return hotkey
+
+    def _format_bytes(self, value):
+        size = float(value)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if size < 1024 or unit == "TB":
+                return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+            size /= 1024
+
+    def _get_memory_summary(self):
+        status = MemoryStatus()
+        status.dwLength = ctypes.sizeof(MemoryStatus)
+        if not kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return "RAM unavailable"
+
+        used = status.ullTotalPhys - status.ullAvailPhys
+        return f"RAM {self._format_bytes(used)} / {self._format_bytes(status.ullTotalPhys)}"
+
+    def _get_uptime_summary(self):
+        milliseconds = kernel32.GetTickCount64()
+        total_seconds = milliseconds // 1000
+        days, remainder = divmod(total_seconds, 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes = remainder // 60
+        if days:
+            return f"Uptime {days}d {hours}h"
+        return f"Uptime {hours}h {minutes}m"
+
+    def _get_local_ip(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+        except OSError:
+            return "Unavailable"
+        finally:
+            sock.close()
+
+    def _get_disk_summary(self):
+        drive = Path.home().anchor or "C:\\"
+        usage = shutil.disk_usage(drive)
+        return f"Disk {drive} {self._format_bytes(usage.free)} free / {self._format_bytes(usage.total)}"
+
+    def _refresh_system_info(self):
+        parts = [
+            f"{os.environ.get('COMPUTERNAME', platform.node() or 'PC')}\\{os.environ.get('USERNAME', 'User')}",
+            platform.platform(),
+            self._get_uptime_summary(),
+            self._get_memory_summary(),
+            self._get_disk_summary(),
+            f"IP {self._get_local_ip()}",
+        ]
+        self.system_info_var.set("  |  ".join(parts))
+        self.root.after(60000, self._refresh_system_info)
 
     def _build_ui(self):
         self.root.configure(bg="#eef3f8")
@@ -175,6 +251,19 @@ class WindowsHelperApp:
             bg="#1f3b5b",
             fg="#ffffff",
         ).pack(side="right")
+
+        tk.Label(
+            header,
+            textvariable=self.system_info_var,
+            font=("Segoe UI", 9),
+            bg="#18314c",
+            fg="#d8e4f0",
+            padx=10,
+            pady=7,
+            anchor="w",
+            justify="left",
+            wraplength=880,
+        ).pack(fill="x", pady=(12, 0))
 
         content_shell = tk.Frame(frame, bg="#eef3f8")
         content_shell.grid(row=1, column=0, sticky="nsew", pady=(14, 12))
@@ -410,7 +499,7 @@ class WindowsHelperApp:
 
         tk.Label(
             panel,
-            text="Custom shortcuts, hotkey settings, network diagnostics, and helper activity.",
+            text="Custom shortcuts, clipboard tools, hotkey settings, network diagnostics, and helper activity.",
             font=("Segoe UI", 10),
             bg="#ffffff",
             fg="#5b6978",
@@ -420,6 +509,7 @@ class WindowsHelperApp:
 
         buttons = [
             ("Manage Custom Shortcuts", self.open_shortcut_manager, True),
+            ("Clipboard Tools", self.open_clipboard_tools, False),
             ("Hotkey Settings", self.open_hotkey_settings, False),
             ("Network Diagnostics", self.open_network_diagnostics, False),
             ("Action Log", self.open_action_log, False),
@@ -444,7 +534,7 @@ class WindowsHelperApp:
             ).grid(row=2 + index // 2, column=index % 2, sticky="ew", padx=(0 if index % 2 == 0 else 8, 0), pady=4)
 
         self.custom_shortcuts_frame = tk.Frame(panel, bg="#ffffff")
-        self.custom_shortcuts_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        self.custom_shortcuts_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         self._refresh_custom_shortcuts_panel()
 
     def _refresh_custom_shortcuts_panel(self):
@@ -1064,6 +1154,105 @@ class WindowsHelperApp:
     def _on_shortcut_window_destroy(self, event):
         if event.widget is self.shortcut_window:
             self.shortcut_window = None
+
+    def open_clipboard_tools(self):
+        if self.clipboard_window is not None and self.clipboard_window.winfo_exists():
+            self.clipboard_window.lift()
+            self.clipboard_window.focus_force()
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title("Clipboard Tools")
+        window.geometry("560x420")
+        window.minsize(480, 360)
+        window.configure(bg="#eef3f8")
+        window.transient(self.root)
+        self.clipboard_window = window
+        window.bind("<Destroy>", self._on_clipboard_window_destroy, add="+")
+
+        frame = tk.Frame(window, bg="#eef3f8", padx=18, pady=18)
+        frame.pack(fill="both", expand=True)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(2, weight=1)
+
+        tk.Label(
+            frame,
+            text="Clipboard Tools",
+            font=("Segoe UI Semibold", 16),
+            bg="#eef3f8",
+            fg="#1d2733",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 12))
+
+        controls = tk.Frame(frame, bg="#eef3f8")
+        controls.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        for column in range(4):
+            controls.grid_columnconfigure(column, weight=1)
+
+        preview = tk.Text(frame, font=("Consolas", 10), wrap="word", height=10)
+        preview.grid(row=2, column=0, sticky="nsew")
+
+        def get_clipboard_text():
+            try:
+                return self.root.clipboard_get()
+            except tk.TclError:
+                return ""
+
+        def set_clipboard_text(text, status):
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update_idletasks()
+            preview.delete("1.0", tk.END)
+            preview.insert(tk.END, text)
+            self._set_action_status(status)
+
+        def show_clipboard():
+            text = get_clipboard_text()
+            preview.delete("1.0", tk.END)
+            preview.insert(tk.END, text or "Clipboard is empty or does not contain text.")
+            self._set_action_status("Displayed clipboard text")
+
+        def clear_clipboard():
+            self.root.clipboard_clear()
+            preview.delete("1.0", tk.END)
+            preview.insert(tk.END, "Clipboard cleared.")
+            self._set_action_status("Cleared clipboard")
+
+        def transform_clipboard(transform, status):
+            text = get_clipboard_text()
+            if not text:
+                messagebox.showwarning("Clipboard Tools", "Clipboard does not contain text.")
+                return
+            set_clipboard_text(transform(text), status)
+
+        buttons = [
+            ("Show Text", show_clipboard),
+            ("Clear", clear_clipboard),
+            ("Copy Date/Time", lambda: set_clipboard_text(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Copied date and time")),
+            ("Copy Local IP", lambda: set_clipboard_text(self._get_local_ip(), "Copied local IP")),
+            ("Uppercase", lambda: transform_clipboard(str.upper, "Uppercased clipboard text")),
+            ("Lowercase", lambda: transform_clipboard(str.lower, "Lowercased clipboard text")),
+            ("Title Case", lambda: transform_clipboard(str.title, "Title-cased clipboard text")),
+        ]
+
+        for index, (label, command) in enumerate(buttons):
+            tk.Button(
+                controls,
+                text=label,
+                font=("Segoe UI", 10),
+                bg="#edf3f9",
+                fg="#18314c",
+                relief="flat",
+                bd=0,
+                padx=12,
+                pady=8,
+                command=command,
+            ).grid(row=index // 4, column=index % 4, sticky="ew", padx=(0 if index % 4 == 0 else 8, 0), pady=4)
+
+        show_clipboard()
+
+    def _on_clipboard_window_destroy(self, event):
+        if event.widget is self.clipboard_window:
+            self.clipboard_window = None
 
     def open_hotkey_settings(self):
         window = tk.Toplevel(self.root)
